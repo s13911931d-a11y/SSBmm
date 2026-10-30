@@ -263,3 +263,7 @@ body.theme-green .theme-menu{background:#fff;border-color:#c9d7cc}body.theme-gre
 .call-card.audio-only{display:flex!important;flex-direction:column;justify-content:center;align-items:center}.call-card.audio-only>video{display:none!important}.call-card.audio-only .call-actions{position:absolute;bottom:calc(22px + env(safe-area-inset-bottom));left:0;right:0}
 .call-card #remote-audio{display:none}
 @media(max-width:720px){.call-card{padding:70px 12px 90px;grid-template-columns:1fr 1fr}.call-card>video{aspect-ratio:3/4}.call-card .call-actions{position:absolute;bottom:calc(20px + env(safe-area-inset-bottom));left:0;right:0}}
+
+/* Group-call participant tiles */
+#call-card video[id^=group-remote-],#call-card audio[id^=group-remote-]{width:100%;max-width:100%;min-height:100px;object-fit:cover;border-radius:12px;background:#111;grid-column:auto}
+#call-card audio[id^=group-remote-]{height:48px;min-height:48px}
