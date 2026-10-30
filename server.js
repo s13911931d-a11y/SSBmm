@@ -454,6 +454,17 @@ app.patch('/api/profile', requireAuth, (req,res) => {
   db.prepare('UPDATE users SET display_name=?,bio=?,avatar_url=? WHERE id=?').run(displayName,bio,avatarUrl,req.user.id);
   res.json({ok:true,user:db.prepare('SELECT id,username,display_name,bio,avatar_url,role,banned,created_at FROM users WHERE id=?').get(req.user.id)});
 });
+app.patch('/api/account/password', requireAuth, (req,res) => {
+  const currentPassword=String(req.body.currentPassword||''), newPassword=String(req.body.newPassword||''), confirmPassword=String(req.body.confirmPassword||'');
+  if(newPassword.length<10||newPassword.length>128) return res.status(400).json({error:'رمز جدید باید بین ۱۰ تا ۱۲۸ کاراکتر باشد.'});
+  if(newPassword!==confirmPassword) return res.status(400).json({error:'تکرار رمز جدید مطابقت ندارد.'});
+  const row=db.prepare('SELECT password_hash FROM users WHERE id=?').get(req.user.id);
+  if(!row||!bcrypt.compareSync(currentPassword,row.password_hash)) return res.status(400).json({error:'رمز عبور فعلی اشتباه است.'});
+  if(currentPassword===newPassword) return res.status(400).json({error:'رمز جدید باید با رمز فعلی متفاوت باشد.'});
+  db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(bcrypt.hashSync(newPassword,12),req.user.id);
+  logAction(req.user.id,'change_password','self');
+  res.json({ok:true,message:'رمز عبور با موفقیت تغییر کرد.'});
+});
 app.post('/api/upload', requireAuth, (req,res) => upload.single('file')(req,res,err => {
   if(err) return res.status(400).json({error:err.message || 'بارگذاری فایل ناموفق بود.'});
   if(!req.file) return res.status(400).json({error:'فایلی انتخاب نشده است.'});
