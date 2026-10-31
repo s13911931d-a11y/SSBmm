@@ -144,6 +144,13 @@ if (!count && process.env.ADMIN_USERNAME && process.env.ADMIN_PASSWORD) {
     .run(process.env.ADMIN_USERNAME, 'مدیر SSB', hash, 'admin');
   console.log('Initial admin account created from environment variables.');
 }
+// Promote the account registered with the configured admin phone.
+if (process.env.ADMIN_USERNAME) {
+  const adminPhone = String(process.env.ADMIN_USERNAME).replace(/[\\s().-]/g, '');
+  const existingAdmin = db.prepare('SELECT id FROM users WHERE phone = ? OR username = ?').get(adminPhone, adminPhone);
+  if (existingAdmin) db.prepare("UPDATE users SET role='admin' WHERE id=?").run(existingAdmin.id);
+}
+
 
 app.set('trust proxy', isProd ? 1 : false);
 app.use(helmet({ contentSecurityPolicy: {
