@@ -120,6 +120,8 @@ function ensureColumn(table, column, definition) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
   if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
+ensureColumn('users','phone',"TEXT NOT NULL DEFAULT ''");
+try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique ON users(phone) WHERE phone <> ''"); } catch(e) {}
 ensureColumn('users','bio',"TEXT NOT NULL DEFAULT ''");
 ensureColumn('users','avatar_url',"TEXT NOT NULL DEFAULT ''");
 ensureColumn('messages','group_id','INTEGER');
@@ -198,26 +200,29 @@ const slugify = s => clean(s,40).toLowerCase().normalize('NFKD').replace(/[^a-z0
 
 app.get('/api/health', (req,res) => res.json({ ok: true, service: 'SSB Messenger' }));
 app.post('/api/register', registerLimiter, (req,res) => {
-  const username = clean(req.body.username, 24).toLowerCase();
+  const phoneRaw = clean(req.body.phone || req.body.username, 32);
+  const phone = phoneRaw.replace(/[\s().-]/g, '');
+  const username = phone;
   const displayName = clean(req.body.displayName, 40);
   const password = String(req.body.password || '');
-  if (!/^[a-z0-9_]{3,24}$/.test(username)) return res.status(400).json({error:'نام کاربری باید ۳ تا ۲۴ حرف انگلیسی، عدد یا زیرخط باشد.'});
+  if (!/^\+?[1-9]\d{7,14}$/.test(phone)) return res.status(400).json({error:'شماره تلفن معتبر وارد کن (با کد کشور، مثل +989121234567).'});
   if (displayName.length < 2) return res.status(400).json({error:'نام نمایشی حداقل ۲ حرف باشد.'});
   if (password.length < 10 || password.length > 128) return res.status(400).json({error:'رمز عبور باید ۱۰ تا ۱۲۸ کاراکتر باشد.'});
   try {
     const hash = bcrypt.hashSync(password, 12);
-    const info = db.prepare('INSERT INTO users(username,display_name,password_hash) VALUES(?,?,?)').run(username, displayName, hash);
+    const info = db.prepare('INSERT INTO users(username,phone,display_name,password_hash) VALUES(?,?,?,?)').run(username, phone, displayName, hash);
     req.session.regenerate(err => {
       if (err) return res.status(500).json({error:'خطا در ساخت نشست.'});
       req.session.userId = Number(info.lastInsertRowid);
       res.json({ok:true});
     });
-  } catch(e) { res.status(409).json({error:'این نام کاربری قبلاً گرفته شده است.'}); }
+  } catch(e) { res.status(409).json({error:'این شماره تلفن قبلاً برای یک حساب ثبت شده است.'}); }
 });
 app.post('/api/login', loginLimiter, (req,res) => {
-  const username = clean(req.body.username, 24).toLowerCase();
+  const phoneRaw = clean(req.body.phone || req.body.username, 32);
+  const phone = phoneRaw.replace(/[\s().-]/g, '');
   const password = String(req.body.password || '');
-  const user = db.prepare('SELECT * FROM users WHERE username=?').get(username);
+  const user = db.prepare('SELECT * FROM users WHERE phone=? OR username=?').get(phone, phone);
   if (!user || user.banned || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({error:'نام کاربری یا رمز عبور نادرست است.'});
   }
@@ -238,7 +243,7 @@ app.get('/api/users', requireAuth, (req,res) => {
   const q=clean(req.query.q,80);
   if(q.length<2) return res.json({users:[]});
   const users=db.prepare(`SELECT id,username,display_name,bio,avatar_url,role FROM users
-    WHERE banned=0 AND id<>? AND (username LIKE ? OR display_name LIKE ?)
+    WHERE banned=0 AND id<>? AND (username LIKE ? OR phone LIKE ? OR display_name LIKE ?)
     ORDER BY CASE WHEN username=? THEN 0 ELSE 1 END,display_name LIMIT 50`)
     .all(req.user.id,'%'+q+'%','%'+q+'%',q);
   res.json({users});
@@ -354,7 +359,7 @@ app.post('/api/messages', requireAuth, (req,res) => {
 app.patch('/api/messages/:id', requireAuth, (req,res) => {
   const id=Number(req.params.id), message=db.prepare('SELECT * FROM messages WHERE id=?').get(id);
   if(!message) return res.status(404).json({error:'پیام پیدا نشد.'});
-  if(message.sender_id!==req.user.id && req.user.role!=='admin') return res.status(403).json({error:'اجازه ویرایش این پیام را ندارید.'});
+  if(message.sender_id!==req.user.id) return res.status(403).json({error:'فقط نویسنده پیام می‌تواند آن را ویرایش کند.'});
   const body=clean(req.body.body,2000);
   if(!body) return res.status(400).json({error:'متن پیام نمی‌تواند خالی باشد.'});
   if(message.media_type!=='text' && !message.media_url) return res.status(400).json({error:'این پیام قابل ویرایش نیست.'});
@@ -368,7 +373,7 @@ app.patch('/api/messages/:id', requireAuth, (req,res) => {
 app.delete('/api/messages/:id', requireAuth, (req,res) => {
   const id=Number(req.params.id), message=db.prepare('SELECT * FROM messages WHERE id=?').get(id);
   if(!message) return res.status(404).json({error:'پیام پیدا نشد.'});
-  if(message.sender_id!==req.user.id && req.user.role!=='admin') return res.status(403).json({error:'اجازه حذف این پیام را ندارید.'});
+  if(message.sender_id!==req.user.id) return res.status(403).json({error:'فقط نویسنده پیام می‌تواند آن را حذف کند.'});
   db.prepare('DELETE FROM messages WHERE id=?').run(id);
   const event={id,deleted:true};
   if(message.group_id) io.to('conversation:'+message.group_id).emit('conversation-message',{conversationId:message.group_id,message:event});
@@ -478,7 +483,7 @@ app.patch('/api/messages/:id', requireAuth, (req,res) => {
   if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({error:'شناسه پیام نامعتبر است.'});
   const m = db.prepare('SELECT * FROM messages WHERE id=?').get(id);
   if (!m) return res.status(404).json({error:'پیام پیدا نشد.'});
-  if (m.sender_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({error:'اجازه ویرایش این پیام را ندارید.'});
+  if (m.sender_id !== req.user.id) return res.status(403).json({error:'فقط نویسنده پیام می‌تواند آن را ویرایش کند.'});
   if (m.media_type !== 'text' || m.media_url) return res.status(400).json({error:'فعلاً فقط پیام متنی قابل ویرایش است.'});
   const body = clean(req.body.body, 2000);
   if (!body) return res.status(400).json({error:'متن پیام نمی‌تواند خالی باشد.'});
@@ -495,7 +500,7 @@ app.delete('/api/messages/:id', requireAuth, (req,res) => {
   if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({error:'شناسه پیام نامعتبر است.'});
   const m = db.prepare('SELECT * FROM messages WHERE id=?').get(id);
   if (!m) return res.status(404).json({error:'پیام پیدا نشد.'});
-  if (m.sender_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({error:'اجازه حذف این پیام را ندارید.'});
+  if (m.sender_id !== req.user.id) return res.status(403).json({error:'فقط نویسنده پیام می‌تواند آن را حذف کند.'});
   db.prepare('DELETE FROM messages WHERE id=?').run(id);
   const event = {id:m.id,deleted:true,sender_id:m.sender_id,recipient_id:m.recipient_id,channel:m.channel,group_id:m.group_id};
   if (m.group_id) io.to('conversation:'+m.group_id).emit('conversation-message',{conversationId:m.group_id,message:event});
@@ -624,6 +629,18 @@ app.post('/api/conversations/:id/messages', requireAuth, (req,res) => {
   io.to('conversation:'+id).emit('conversation-message', {conversationId:id,message});
   res.json({message});
 });
+app.post('/api/admin/broadcast', requireAuth, requireAdmin, (req,res) => {
+  const body=clean(req.body.body,2000), mediaUrl=clean(req.body.mediaUrl,300), mediaType=clean(req.body.mediaType||'text',12);
+  if(!body && !mediaUrl) return res.status(400).json({error:'متن پیام خالی است.'});
+  if(!['text','image','audio','video','file'].includes(mediaType)) return res.status(400).json({error:'نوع پیام نامعتبر است.'});
+  if(mediaUrl && !mediaUrl.startsWith('/uploads/')) return res.status(400).json({error:'رسانه نامعتبر است.'});
+  const info=db.prepare('INSERT INTO messages(sender_id,recipient_id,channel,body,media_url,media_type) VALUES(?,NULL,?,?,?,?)').run(req.user.id,'general',body,mediaUrl,mediaType);
+  const message={id:Number(info.lastInsertRowid),sender_id:req.user.id,recipient_id:null,channel:'general',body,media_url:mediaUrl,media_type:mediaType,created_at:new Date().toISOString(),sender_name:req.user.display_name};
+  io.to('channel:general').emit('new-message',message);
+  logAction(req.user.id,'admin_broadcast',String(message.id));
+  res.json({ok:true,message});
+});
+
 app.get('/api/admin/conversations', requireAuth, requireAdmin, (req,res) => {
   res.json({conversations:db.prepare(`SELECT c.*,u.username AS owner_name,(SELECT COUNT(*) FROM conversation_members m WHERE m.conversation_id=c.id) AS members FROM conversations c JOIN users u ON u.id=c.owner_id ORDER BY c.id DESC`).all(),
     directChats:db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE recipient_id IS NOT NULL`).get().n,
